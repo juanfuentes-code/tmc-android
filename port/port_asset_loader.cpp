@@ -35,6 +35,19 @@ extern Frame* gSpriteAnimations_322[];
 #undef max
 #endif
 
+/* True when the loaded ROM is NOT the USA asset baseline (i.e. EU or JP). The
+ * extracted assets/ cache — texts.json, sprite_ptrs.json, the area tables and
+ * gfx groups — is built USA-baseline. Reseeding region data from it on a non-USA
+ * ROM overwrites the region-correct values resolved from that ROM's own offset
+ * table with USA content: garbled/blank text and a flood of "FrameZero: animPtr
+ * ... outside/overruns ROM" as USA-baseline animation pointers miss on non-USA
+ * entities (blank file-select preview + menu text). JP already gates every such
+ * override; EU hit the identical failure (issue #41) because the gates only
+ * named JP. Non-USA ROMs skip the cache and resolve straight from ROM. */
+static inline bool Port_AssetCacheIsForeignBaseline(void) {
+    return gRomRegion != ROM_REGION_USA;
+}
+
 #include <nlohmann/json.hpp>
 
 #include <array>
@@ -1436,8 +1449,9 @@ extern "C" bool32 Port_LoadGfxGroupFromAssets(u32 group) {
      * ZELDA logo / ゼルダの伝説 / PRESS START on BG1). Loading the USA group for a
      * JP ROM leaves BG1 empty (no logo). Skip the asset path for a JP ROM so
      * LoadGfxGroup falls through to the region-correct ROM gfx (gGfxGroups[group]
-     * resolved from JP offsets). Matches the JP asset-override gate in port_rom.c. */
-    if (gRomRegion == ROM_REGION_JP) {
+     * resolved from JP offsets). Matches the JP asset-override gate in port_rom.c.
+     * EU is USA-baseline-divergent the same way, so it takes this path too. */
+    if (Port_AssetCacheIsForeignBaseline()) {
         return FALSE;
     }
     if (!EnsureAssetGroupCache()) {
@@ -1510,7 +1524,7 @@ extern "C" bool32 Port_LoadGfxGroupFromAssets(u32 group) {
 }
 
 extern "C" bool32 Port_LoadAreaTablesFromAssets(void) {
-    if (gRomRegion == ROM_REGION_JP)
+    if (Port_AssetCacheIsForeignBaseline())
         return FALSE;
     if (!EnsureAssetGroupCache() || !gAssetGroupCache.hasAreaData) {
         return FALSE;
@@ -1542,8 +1556,11 @@ extern "C" bool32 Port_LoadSpritePtrsFromAssets(void) {
      * blocks forever and never returns control (Link frozen at the intro handover).
      * port_rom.c:1714 already skips its own override call for JP, but the asset
      * bootstrap (port_asset_bootstrap.cpp) calls this ungated — gate it here too so
-     * JP keeps its region-correct ROM-resolved gSpritePtrs regardless of caller. */
-    if (gRomRegion == ROM_REGION_JP) {
+     * JP keeps its region-correct ROM-resolved gSpritePtrs regardless of caller.
+     * EU has the same USA-baseline mismatch (issue #41): the USA asset cache's
+     * animation pointers miss on EU entities, so EU also keeps ROM-resolved
+     * gSpritePtrs and takes the ROM branch in Port_GetSpriteAnimationData. */
+    if (Port_AssetCacheIsForeignBaseline()) {
         return FALSE;
     }
     if (!EnsureAssetGroupCache() || !gAssetGroupCache.hasSpritePtrData || gAssetGroupCache.spritePtrs.empty()) {
@@ -1719,7 +1736,7 @@ extern "C" bool32 Port_LoadSpritePtrsFromAssets(void) {
 }
 
 extern "C" bool32 Port_LoadTextsFromAssets(void) {
-    if (gRomRegion == ROM_REGION_JP)
+    if (Port_AssetCacheIsForeignBaseline())
         return FALSE;
     if (!EnsureAssetGroupCache() || !gAssetGroupCache.hasTextData) {
         return FALSE;
@@ -1772,7 +1789,7 @@ extern "C" bool32 Port_AreSpritePtrsLoadedFromAssets(void) {
 }
 
 extern "C" bool32 Port_RefreshAreaDataFromAssets(u32 area) {
-    if (gRomRegion == ROM_REGION_JP)
+    if (Port_AssetCacheIsForeignBaseline())
         return FALSE;
     if (!EnsureAssetGroupCache() || !gAssetGroupCache.hasAreaData || area >= kAreaCount) {
         return FALSE;
@@ -1888,8 +1905,10 @@ extern "C" const u8* Port_GetSpriteAnimationData(u16 spriteIndex, u32 animIndex)
      * ROM" warnings → blank/garbled NPC sprites). Port_LoadRom already keeps JP on
      * region-correct ROM-resolved gSpritePtrs (the "asset override skipped for JP"
      * gate), so resolve JP animations straight from the ROM below, consistent with
-     * that decision, instead of the asset cache. */
-    if (gRomRegion != ROM_REGION_JP && EnsureAssetGroupCache()) {
+     * that decision, instead of the asset cache. EU behaves like JP here (issue
+     * #41): its entities' animation pointers are not USA-baseline, so serve them
+     * from the ROM too. Only a USA ROM uses the asset-cache animation buffers. */
+    if (!Port_AssetCacheIsForeignBaseline() && EnsureAssetGroupCache()) {
         if (!gAssetGroupCache.spritePtrsLoaded) {
             Port_LoadSpritePtrsFromAssets();
         }
